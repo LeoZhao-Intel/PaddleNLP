@@ -77,7 +77,7 @@ if paddle.is_compiled_with_cuda():
 
 
 def rebuild_padding(tmp_out, padding_offset, seq_len_encoder, input_ids=0):
-    return tmp_out[:, -2:-1, :]
+    return tmp_out[:, -1:, :]
 
 
 __all__ = [
@@ -2979,19 +2979,27 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
 
         assert self.num_layers == len(self.qkv_weights)
 
-        residual_input = src
+        rotary_embs = rotary_embs.to(src.dtype)
         import paddlenlp_ops
 
+        self.Fused_Rms_Qkv_Rope_v2 = paddlenlp_ops.Fused_Rms_Qkv_Rope_v2(self.ln_scales, self.qkv_weights, self._epsilon, self.head_dim, self.num_heads)
+        self.Fused_Sdpa_Proj = paddlenlp_ops.Fused_Sdpa_Proj(self.head_dim**-0.5, self.linear_weights)
+        self.Fused_Rms_Mlp = paddlenlp_ops.Fused_Rms_Mlp(self.ffn_ln_scales, self._epsilon, self.ffn1_weights, self.ffn2_weights)
+
+        q_seq_len = src.shape[-2]
+        kv_seq_len = caches[0][0].shape[-2]
+        if q_seq_len > 1:
+            attention_mask = attn_mask[..., :q_seq_len, :kv_seq_len]
+        else:
+            for i in range(src.shape[0]):
+                attn_mask[i, :, :, :seq_lens[0] + 1] = paddle.ones(shape=(1, 1, 1, seq_lens[0] + 1), dtype=src.dtype)
+            attention_mask = (attn_mask - 1) * 1e4
+
+        position = seq_lens[0]
         for i in range(self.num_layers):
 
-            rotary_embs = rotary_embs.to(src.dtype)
-
-            # if(len(src.shape) == 2):
-            #    src = src.unsqueeze(1)
-
-            query_states, key_states, value_states = paddlenlp_ops.fused_rms_qkv_rope_v2(
-                src, self.ln_scales[i], self.qkv_weights[i], rotary_embs, self._epsilon, self.head_dim, self.num_heads
-            )
+            residual_input = src
+            query_states, key_states, value_states = self.Fused_Rms_Qkv_Rope_v2(i, src, rotary_embs)
             ##### Fused-OP-1 end
 
             ##### Fused-OP-2 start
@@ -3000,22 +3008,20 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
                 caches[i][0][:, :, : key_states.shape[2], :] = key_states
                 caches[i][1][:, :, : value_states.shape[2], :] = value_states
             else:
-                paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=seq_lens[0] - 1, source=key_states)
-                paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=seq_lens[0] - 1, source=value_states)
+                paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=position, source=key_states)
+                paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=position, source=value_states)
+                # kv_states = paddle.stack([key_states, value_states], axis=0)
+                # paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=kv_states)
             ##### Fused-OP-2 end
 
             ##### Fused-OP-3 start
-            q_seq_len = query_states.shape[-2]
-            kv_seq_len = key_states.shape[-2]
-            attention_mask = attn_mask[..., :q_seq_len, :kv_seq_len]
             # attention_mask = attention_mask.astype(query_states.dtype)
-            out_linear_out = paddlenlp_ops.fused_sdpa_proj(
+            # print(f"position={position}, attn_mask={attn_mask.shape}, q:{query_states.shape}, k={key_states.shape}")
+            out_linear_out = self.Fused_Sdpa_Proj(i,
                 query_states,
-                key_states,
-                value_states,
+                caches[i][0], #key_states,
+                caches[i][1], #value_states,
                 attention_mask,
-                self.linear_weights[i],
-                scaling_factor=self.head_dim**-0.5,
             )
             ##### Fused-OP-3 end
 
@@ -3026,24 +3032,17 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             residual_input = out_linear_out
 
             ##### Fused-OP-4 start
-            ffn2_out = paddlenlp_ops.fused_rms_mlp(
-                out_linear_out,
-                self.ffn_ln_scales[i],
-                self.ffn1_weights[i],
-                self.ffn2_weights[i],
-                self._epsilon,
-            )
+            ffn2_out = self.Fused_Rms_Mlp(i, out_linear_out)
             ##### Fused-OP-4 end
 
             # all_reduce
             if self.nranks > 1:
                 dist.all_reduce(ffn2_out)
-            hidden_states = residual_input + ffn2_out
-            src = hidden_states
+            src = residual_input + ffn2_out
             # end LlamaDecoderLayer
 
         kwargs["time_step"] = time_step
-        kwargs["multi_block_output"] = hidden_states
+        kwargs["multi_block_output"] = src
         kwargs["seq_lens"] = seq_lens
         kwargs["input_ids"] = input_ids
 
