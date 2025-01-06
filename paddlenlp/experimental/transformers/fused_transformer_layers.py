@@ -2971,34 +2971,26 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         time_step=None,
         **kwargs,
     ):
-        # TODO 1: caches update
-        # TODO 2: RmsNormKernel optional residual_input not realized
-        # TODO 3: RmsNormKernel begin_norm_axis = hidden_states.dim() - 1
         if caches is not None:
             assert len(caches) == len(self.qkv_weights) or len(caches) == 2 * len(self.qkv_weights)
 
         assert self.num_layers == len(self.qkv_weights)
 
         rotary_embs = rotary_embs.to(src.dtype)
+        batch_size = src.shape[0]
+        attention_mask = attn_mask
+
         import paddlenlp_ops
 
         self.Fused_Rms_Qkv_Rope_v2 = paddlenlp_ops.Fused_Rms_Qkv_Rope_v2(self.ln_scales, self.qkv_weights, self._epsilon, self.head_dim, self.num_heads)
         self.Fused_Sdpa_Proj = paddlenlp_ops.Fused_Sdpa_Proj(self.head_dim**-0.5, self.linear_weights)
         self.Fused_Rms_Mlp = paddlenlp_ops.Fused_Rms_Mlp(self.ffn_ln_scales, self._epsilon, self.ffn1_weights, self.ffn2_weights)
 
-        q_seq_len = src.shape[-2]
-        kv_seq_len = caches[0][0].shape[-2]
-        if q_seq_len > 1:
-            attention_mask = attn_mask[..., :q_seq_len, :kv_seq_len]
-        else:
-            for i in range(src.shape[0]):
-                attn_mask[i, :, :, :seq_lens[0] + 1] = paddle.ones(shape=(1, 1, 1, seq_lens[0] + 1), dtype=src.dtype)
-            attention_mask = (attn_mask - 1) * 1e4
-
         position = seq_lens[0]
         for i in range(self.num_layers):
 
             residual_input = src
+            ##### Fused-OP-1 start
             query_states, key_states, value_states = self.Fused_Rms_Qkv_Rope_v2(i, src, rotary_embs)
             ##### Fused-OP-1 end
 
