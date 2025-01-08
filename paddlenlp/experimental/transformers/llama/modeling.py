@@ -94,10 +94,7 @@ class FusedLlamaRMSNorm(nn.Layer):
         result = paddle.incubate.nn.functional.fused_rms_norm(
             hidden_states, self.weight, None, self.variance_epsilon, begin_norm_axis=2
         )
-        if isinstance(result, tuple):
-            return result[0].squeeze(axis=1)
-        return result
-
+        return result[0].squeeze(axis=1)
 
 class LLamaAvxLMHead(nn.Layer):
     def __init__(self, config: LlamaConfig):
@@ -1382,6 +1379,7 @@ class LlamaInferenceModel(LlamaPretrainedModel):
                             paddle.to_tensor(state_dict["llama.layers.{}.mlp.down_proj.layer.bias".format(idx)])
                         )
 
+        self.transformer_block.init_class()
 
 @register_base_model
 class LlamaBlockInferenceModel(LlamaInferenceModel):

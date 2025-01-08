@@ -2955,6 +2955,13 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
 
         self.config = config
 
+    def init_class(self):
+        import paddlenlp_ops
+
+        self.Fused_Rms_Qkv_Rope_v2 = paddlenlp_ops.Fused_Rms_Qkv_Rope_v2(self.ln_scales, self.qkv_weights, self._epsilon, self.head_dim, self.num_heads)
+        self.Fused_Sdpa_Proj = paddlenlp_ops.Fused_Sdpa_Proj(self.head_dim**-0.5, self.linear_weights)
+        self.Fused_Rms_Mlp = paddlenlp_ops.Fused_Rms_Mlp(self.ffn_ln_scales, self._epsilon, self.ffn1_weights, self.ffn2_weights)
+
     def forward(
         self,
         input_ids,
@@ -2977,14 +2984,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         assert self.num_layers == len(self.qkv_weights)
 
         rotary_embs = rotary_embs.to(src.dtype)
-        batch_size = src.shape[0]
         attention_mask = attn_mask
-
-        import paddlenlp_ops
-
-        self.Fused_Rms_Qkv_Rope_v2 = paddlenlp_ops.Fused_Rms_Qkv_Rope_v2(self.ln_scales, self.qkv_weights, self._epsilon, self.head_dim, self.num_heads)
-        self.Fused_Sdpa_Proj = paddlenlp_ops.Fused_Sdpa_Proj(self.head_dim**-0.5, self.linear_weights)
-        self.Fused_Rms_Mlp = paddlenlp_ops.Fused_Rms_Mlp(self.ffn_ln_scales, self._epsilon, self.ffn1_weights, self.ffn2_weights)
 
         position = seq_lens[0]
         for i in range(self.num_layers):
@@ -2997,9 +2997,10 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             ##### Fused-OP-2 start
             # write cache kv (inplace)
             if time_step is None:  # context
-                caches[i][0][:, :, : key_states.shape[2], :] = key_states
-                caches[i][1][:, :, : value_states.shape[2], :] = value_states
+                caches[i][0][:, :, : paddle.shape(key_states)[2], :] = key_states
+                caches[i][1][:, :, : paddle.shape(value_states)[2], :] = value_states
             else:
+                import paddlenlp_ops
                 paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=position, source=key_states)
                 paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=position, source=value_states)
                 # kv_states = paddle.stack([key_states, value_states], axis=0)

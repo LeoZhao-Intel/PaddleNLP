@@ -58,7 +58,7 @@ def tensors_to_device(device, *tensors):
 
 
 def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags):
-    if False:
+    if True:
         import paddlenlp_ops
 
         device = pre_ids_all.place
@@ -190,7 +190,6 @@ def ref_get_token_penalty_multi_scores(
         )
 
         return logits_out
-
 
 def ref_top_p_sampling(probs, top_p):
     sorted_probs = paddle.sort(probs, descending=True)
