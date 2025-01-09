@@ -2958,8 +2958,8 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
     def init_class(self):
         import paddlenlp_ops
 
-        self.Fused_Rms_Qkv_Rope_v2 = paddlenlp_ops.Fused_Rms_Qkv_Rope_v2(self.ln_scales, self.qkv_weights, self._epsilon, self.head_dim, self.num_heads)
-        self.Fused_Sdpa_Proj = paddlenlp_ops.Fused_Sdpa_Proj(self.head_dim**-0.5, self.linear_weights)
+        self.Fused_Rms_Qkv_Rope_v3 = paddlenlp_ops.Fused_Rms_Qkv_Rope_v3(self.ln_scales, self.qkv_weights, self._epsilon, self.head_dim, self.num_heads)
+        self.Fused_Sdpa_Proj_v2 = paddlenlp_ops.Fused_Sdpa_Proj_v2(self.head_dim**-0.5, self.linear_weights)
         self.Fused_Rms_Mlp = paddlenlp_ops.Fused_Rms_Mlp(self.ffn_ln_scales, self._epsilon, self.ffn1_weights, self.ffn2_weights)
 
     def forward(
@@ -2991,29 +2991,22 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
 
             residual_input = src
             ##### Fused-OP-1 start
-            query_states, key_states, value_states = self.Fused_Rms_Qkv_Rope_v2(i, src, rotary_embs)
+            query_states, kv_states = self.Fused_Rms_Qkv_Rope_v3(i, src, rotary_embs)
             ##### Fused-OP-1 end
 
             ##### Fused-OP-2 start
             # write cache kv (inplace)
             if time_step is None:  # context
-                caches[i][0][:, :, : paddle.shape(key_states)[2], :] = key_states
-                caches[i][1][:, :, : paddle.shape(value_states)[2], :] = value_states
+                caches[i][..., : paddle.shape(kv_states)[3], :] = kv_states
             else:
                 import paddlenlp_ops
-                paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=position, source=key_states)
-                paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=position, source=value_states)
-                # kv_states = paddle.stack([key_states, value_states], axis=0)
-                # paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=kv_states)
+                paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=kv_states)
             ##### Fused-OP-2 end
 
             ##### Fused-OP-3 start
-            # attention_mask = attention_mask.astype(query_states.dtype)
-            # print(f"position={position}, attn_mask={attn_mask.shape}, q:{query_states.shape}, k={key_states.shape}")
-            out_linear_out = self.Fused_Sdpa_Proj(i,
+            out_linear_out = self.Fused_Sdpa_Proj_v2(i,
                 query_states,
-                caches[i][0], #key_states,
-                caches[i][1], #value_states,
+                caches[i], #kv_states,
                 attention_mask,
             )
             ##### Fused-OP-3 end

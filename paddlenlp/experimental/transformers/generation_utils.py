@@ -240,7 +240,11 @@ class GenerationInferenceModel(GenerationMixin):
     def to_static(self, output_path: str, config: dict):
         dtype = config.get("dtype", paddle.get_default_dtype())
 
-        cache_kvs_shapes = self.get_cache_kvs_shape(self.config, max_length=config.get("max_length", None))
+        # import pdb; pdb.set_trace()
+        bsz = None
+        src_len = 64
+        seqlen = 128
+        cache_kvs_shapes = self.get_cache_kvs_shape(self.config, max_batch_size=bsz, max_length=seqlen)
         export_precache = config.get("export_precache", False)
         if export_precache:
             precache_input_spec = [
@@ -251,27 +255,27 @@ class GenerationInferenceModel(GenerationMixin):
             precache_input_spec = None
 
         input_spec = [
-            paddle.static.InputSpec(shape=[None, None], dtype="int64", name="input_ids"),  # input_ids
-            paddle.static.InputSpec(shape=[None, 1, None, None], dtype=dtype, name="attention_mask"),  # attention_mask
-            paddle.static.InputSpec(shape=[None, None], dtype="int64", name="position_ids"),  # position_ids
-            paddle.static.InputSpec(shape=[None, 1], dtype="float32", name="penalty_score"),  # penalty_score
-            paddle.static.InputSpec(shape=[None, 1], dtype="float32", name="frequency_score"),  # frequency_score
-            paddle.static.InputSpec(shape=[None, 1], dtype="float32", name="presence_score"),  # presence_score
-            paddle.static.InputSpec(shape=[None, 1], dtype="int64", name="min_length"),  # min_decode_length
-            paddle.static.InputSpec(shape=[None, 1], dtype="int64", name="max_length"),  # max_decode_length
-            paddle.static.InputSpec(shape=[None, 1], dtype="float32", name="temperature"),  # temperature
-            paddle.static.InputSpec(shape=[None, 1], dtype="float32", name="top_p"),  # top_p
-            paddle.static.InputSpec(shape=[None], dtype="int64", name="eos_token_id"),  # eos_token_id
-            paddle.static.InputSpec(shape=[None, 1], dtype="int32", name="seq_len_encoder"),  # seq_len_encoder
-            paddle.static.InputSpec(shape=[None, 1], dtype="int32", name="seq_len_decoder"),  # seq_len_decoder
-            paddle.static.InputSpec(shape=[None, 1], dtype="int64", name="step_idx"),  # step_idx
-            paddle.static.InputSpec(shape=[None, 1], dtype="bool", name="stop_flags"),  # stop_flags
-            paddle.static.InputSpec(shape=[None, 1], dtype="int64", name="tgt_ids"),  # tgt_ids
-            paddle.static.InputSpec(shape=[None, 1], dtype="int64", name="tgt_pos"),  # tgt_pos
+            paddle.static.InputSpec(shape=[bsz, src_len], dtype="int64", name="input_ids"),  # input_ids
+            paddle.static.InputSpec(shape=[bsz, 1, seqlen, seqlen], dtype="int64", name="attention_mask"),  # attention_mask
+            paddle.static.InputSpec(shape=[bsz, seqlen], dtype="int64", name="position_ids"),  # position_ids
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="float32", name="penalty_score"),  # penalty_score
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="float32", name="frequency_score"),  # frequency_score
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="float32", name="presence_score"),  # presence_score
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int64", name="min_length"),  # min_decode_length
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int64", name="max_length"),  # max_decode_length
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="float32", name="temperature"),  # temperature
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="float32", name="top_p"),  # top_p
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int64", name="eos_token_id"),  # eos_token_id
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int32", name="seq_len_encoder"),  # seq_len_encoder
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int32", name="seq_len_decoder"),  # seq_len_decoder
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int64", name="step_idx"),  # step_idx
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="bool", name="stop_flags"),  # stop_flags
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int64", name="tgt_ids"),  # tgt_ids
+            paddle.static.InputSpec(shape=[bsz, 1], dtype="int64", name="tgt_pos"),  # tgt_pos
             paddle.static.InputSpec(
-                shape=[None, 1, 1, None], dtype=dtype, name="tgt_generation_mask"
+                shape=[bsz, 1, 1, seqlen], dtype=dtype, name="tgt_generation_mask"
             ),  # tgt_generation_mask
-            paddle.static.InputSpec(shape=[None, None], dtype="int64", name="pre_ids"),  # pre_ids
+            paddle.static.InputSpec(shape=[bsz, seqlen], dtype="int64", name="pre_ids"),  # pre_ids
             paddle.static.InputSpec(shape=[1], dtype="int64", name="stop_nums"),  # stop_nums
             [
                 paddle.static.InputSpec(
