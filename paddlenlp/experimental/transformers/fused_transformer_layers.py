@@ -2986,7 +2986,11 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         rotary_embs = rotary_embs.to(src.dtype)
         attention_mask = attn_mask
 
-        position = paddle.max(seq_lens, axis=0)
+        if time_step is None:
+            position = src.shape[1]
+        else:
+            position = paddle.max(seq_lens, axis=0)
+
         for i in range(self.num_layers):
 
             residual_input = src
@@ -2997,7 +3001,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             ##### Fused-OP-2 start
             # write cache kv (inplace)
             if time_step is None:  # context
-                caches[i][..., : paddle.shape(kv_states)[3], :] = kv_states
+                caches[i][..., :position, :] = kv_states
             else:
                 import paddlenlp_ops
                 paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=kv_states)
