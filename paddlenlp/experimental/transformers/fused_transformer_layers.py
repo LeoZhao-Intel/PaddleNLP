@@ -2986,7 +2986,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         rotary_embs = rotary_embs.to(src.dtype)
         attention_mask = attn_mask
 
-        position = seq_lens[0]
+        position = paddle.max(seq_lens, axis=0)
         for i in range(self.num_layers):
 
             residual_input = src
