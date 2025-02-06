@@ -2960,6 +2960,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
 
         self.Fused_Rms_Qkv_Rope_v3 = paddlenlp_ops.Fused_Rms_Qkv_Rope_v3(self.ln_scales, self.qkv_weights, self._epsilon, self.head_dim, self.num_heads)
         self.Fused_Sdpa_Proj_v2 = paddlenlp_ops.Fused_Sdpa_Proj_v2(self.head_dim**-0.5, self.linear_weights)
+        self.Fused_Sdpa_Dec_Proj = paddlenlp_ops.Fused_Sdpa_Dec_Proj(self.head_dim**-0.5, self.linear_weights)
         self.Fused_Rms_Mlp = paddlenlp_ops.Fused_Rms_Mlp(self.ffn_ln_scales, self._epsilon, self.ffn1_weights, self.ffn2_weights)
 
     def forward(
@@ -2985,6 +2986,10 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
 
         rotary_embs = rotary_embs.to(src.dtype)
         attention_mask = attn_mask
+        position = paddle.max(seq_lens, axis=0)
+
+        if len(src.shape) == 2:
+            src = src.unsqueeze(axis=1)
 
         if time_step is None:
             position = src.shape[1]
@@ -2998,22 +3003,23 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             query_states, kv_states = self.Fused_Rms_Qkv_Rope_v3(i, src, rotary_embs)
             ##### Fused-OP-1 end
 
-            ##### Fused-OP-2 start
-            # write cache kv (inplace)
+            ##### Fused-OP-2&3 start
             if time_step is None:  # context
                 caches[i][..., :position, :] = kv_states
+                out_linear_out = self.Fused_Sdpa_Proj_v2(i,
+                    query_states,
+                    caches[i], #kv_states,
+                    attention_mask,
+                )
             else:
                 import paddlenlp_ops
                 paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=kv_states)
-            ##### Fused-OP-2 end
-
-            ##### Fused-OP-3 start
-            out_linear_out = self.Fused_Sdpa_Proj_v2(i,
-                query_states,
-                caches[i], #kv_states,
-                attention_mask,
-            )
-            ##### Fused-OP-3 end
+                out_linear_out = self.Fused_Sdpa_Dec_Proj(i,
+                    query_states,
+                    caches[i], #kv_states,
+                    attention_mask,
+                )
+            ##### Fused-OP-2&3 end
 
             # all_reduce
             if self.nranks > 1:
@@ -3039,6 +3045,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         # hidden_states = [1, 34, 4096]
         out = self.post_process(**kwargs)
         # out = [1, 4096]
+        out = out.squeeze(axis=1)
         return out, caches
 
 
